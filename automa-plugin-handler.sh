@@ -46,10 +46,12 @@ PLUGIN_SLUG=""
 APPLY=0
 PURGE_CACHE=0
 EXCLUDE_FILE=""
+INCLUDE_FILE=""
 APPS_ROOT="$APPS_ROOT_DEFAULT"
 WP_TIMEOUT="$WP_TIMEOUT_DEFAULT"
 WP_BIN="$WP_BIN_DEFAULT"
 REPORT_FILE=""
+MAX_PROCESSED=0
 
 HAS_TIMEOUT=0
 TIMEOUT_BIN=""
@@ -70,7 +72,9 @@ Opzioni principali:
   --action ACTION            Azione da eseguire
   --plugin-slug SLUG         Slug atteso del plugin per le verifiche
   --zip-path PATH            Percorso del file ZIP richiesto da install-zip/install-activate
+  --include-file FILE        File con app_id e/o siteurl da includere, una voce per riga
   --exclude-file FILE        File con app_id e/o siteurl da escludere, una voce per riga
+  --max-processed N          Ferma il batch dopo N WordPress validi processati
   --purge-cache              Esegue purge cache dopo azioni reali diverse da info
   --apply                    Esegue davvero le modifiche
   --report-file FILE         Percorso del report CSV; default in \$HOME
@@ -97,6 +101,12 @@ Formato exclude file:
       123456
       https://example.com
       http://staging.example.net
+
+Formato include file:
+  - Una voce per riga
+  - Righe vuote e righe che iniziano con # vengono ignorate
+  - Match esatto su app_id oppure siteurl
+  - Se presente, solo le app in lista vengono processate
 
 Esempi:
   $SCRIPT_NAME --action info --plugin-slug breeze
@@ -301,6 +311,17 @@ load_excludes() {
   fi
 }
 
+load_includes() {
+  if [[ -z "$INCLUDE_FILE" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "$INCLUDE_FILE" ]]; then
+    log_error "File inclusioni non trovato: $INCLUDE_FILE"
+    exit 1
+  fi
+}
+
 is_excluded() {
   local app_id="$1"
   local siteurl="$2"
@@ -321,6 +342,30 @@ is_excluded() {
       return 0
     fi
   done < "$EXCLUDE_FILE"
+
+  return 1
+}
+
+is_included() {
+  local app_id="$1"
+  local siteurl="$2"
+  local line=""
+
+  if [[ -z "$INCLUDE_FILE" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
+    [[ -z "$line" ]] && continue
+    [[ "${line:0:1}" == "#" ]] && continue
+
+    if [[ "$line" == "$app_id" || "$line" == "$siteurl" ]]; then
+      return 0
+    fi
+  done < "$INCLUDE_FILE"
 
   return 1
 }
@@ -368,6 +413,11 @@ validate_args() {
     log_error "--wp-timeout deve essere un intero positivo"
     exit 1
   fi
+
+  if ! [[ "$MAX_PROCESSED" =~ ^[0-9]+$ ]]; then
+    log_error "--max-processed deve essere un intero positivo o zero"
+    exit 1
+  fi
 }
 
 parse_args() {
@@ -385,8 +435,16 @@ parse_args() {
         ZIP_PATH="${2:-}"
         shift 2
         ;;
+      --include-file)
+        INCLUDE_FILE="${2:-}"
+        shift 2
+        ;;
       --exclude-file)
         EXCLUDE_FILE="${2:-}"
+        shift 2
+        ;;
+      --max-processed)
+        MAX_PROCESSED="${2:-}"
         shift 2
         ;;
       --purge-cache)
@@ -470,6 +528,7 @@ main() {
   parse_args "$@"
   detect_timeout_bin
   validate_args
+  load_includes
   load_excludes
   ensure_report_file
   print_banner
@@ -554,6 +613,18 @@ main() {
       log_warn "  esclusa da file di esclusione"
       append_csv_row "$index" "$app_id" "$siteurl" "$wp_detected" "$wp_installed" "$ACTION" "$ZIP_PATH" "$PLUGIN_SLUG" "$pre_status" "$post_status" "$install_result" "$activate_result" "$cache_purged" "$note"
       continue
+    fi
+
+    if ! is_included "$app_id" "$siteurl"; then
+      note="$(join_note "$note" "not_included")"
+      log_warn "  non presente nel file di inclusione"
+      append_csv_row "$index" "$app_id" "$siteurl" "$wp_detected" "$wp_installed" "$ACTION" "$ZIP_PATH" "$PLUGIN_SLUG" "$pre_status" "$post_status" "$install_result" "$activate_result" "$cache_purged" "$note"
+      continue
+    fi
+
+    if (( MAX_PROCESSED > 0 && processed >= MAX_PROCESSED )); then
+      log_warn "Raggiunto limite di WordPress processate: $MAX_PROCESSED"
+      break
     fi
 
     processed=$((processed + 1))
