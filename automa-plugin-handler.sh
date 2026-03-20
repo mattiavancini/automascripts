@@ -51,7 +51,7 @@ APPS_ROOT="$APPS_ROOT_DEFAULT"
 WP_TIMEOUT="$WP_TIMEOUT_DEFAULT"
 WP_BIN="$WP_BIN_DEFAULT"
 REPORT_FILE=""
-MAX_PROCESSED=0
+LIMIT=0
 
 HAS_TIMEOUT=0
 TIMEOUT_BIN=""
@@ -74,7 +74,7 @@ Opzioni principali:
   --zip-path PATH            Percorso del file ZIP richiesto da install-zip/install-activate
   --include-file FILE        File con app_id e/o siteurl da includere, una voce per riga
   --exclude-file FILE        File con app_id e/o siteurl da escludere, una voce per riga
-  --max-processed N          Ferma il batch dopo N WordPress validi processati
+  --limit N                  Ferma il batch dopo N WordPress validi processati
   --purge-cache              Esegue purge cache dopo azioni reali diverse da info
   --apply                    Esegue davvero le modifiche
   --report-file FILE         Percorso del report CSV; default in \$HOME
@@ -414,8 +414,8 @@ validate_args() {
     exit 1
   fi
 
-  if ! [[ "$MAX_PROCESSED" =~ ^[0-9]+$ ]]; then
-    log_error "--max-processed deve essere un intero positivo o zero"
+  if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
+    log_error "--limit deve essere un intero positivo o zero"
     exit 1
   fi
 }
@@ -443,8 +443,13 @@ parse_args() {
         EXCLUDE_FILE="${2:-}"
         shift 2
         ;;
+      --limit)
+        LIMIT="${2:-}"
+        shift 2
+        ;;
       --max-processed)
-        MAX_PROCESSED="${2:-}"
+        LIMIT="${2:-}"
+        log_warn "Opzione deprecata: usa --limit invece di --max-processed"
         shift 2
         ;;
       --purge-cache)
@@ -620,11 +625,6 @@ main() {
       log_warn "  non presente nel file di inclusione"
       append_csv_row "$index" "$app_id" "$siteurl" "$wp_detected" "$wp_installed" "$ACTION" "$ZIP_PATH" "$PLUGIN_SLUG" "$pre_status" "$post_status" "$install_result" "$activate_result" "$cache_purged" "$note"
       continue
-    fi
-
-    if (( MAX_PROCESSED > 0 && processed >= MAX_PROCESSED )); then
-      log_warn "Raggiunto limite di WordPress processate: $MAX_PROCESSED"
-      break
     fi
 
     processed=$((processed + 1))
@@ -886,6 +886,11 @@ main() {
     print_colored_value "cache purge" "$cache_purged"
     printf '  %-18s %s\n' "note" "${note:-n/a}"
     printf '\n'
+
+    if (( LIMIT > 0 && processed >= LIMIT )); then
+      log_warn "Raggiunto limit di WordPress processate: $LIMIT"
+      break
+    fi
   done
 
   printf '\n'
